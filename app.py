@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🎤 Estonian Vocal Radar")
-st.write("SoundCloudi uute Eesti artistide ja vokalistide radar")
+st.write("Otsi uusi Eesti artiste SoundCloudist ja YouTube'ist")
 
 
 # ------------------------------------------------
@@ -28,8 +28,11 @@ otsingud = [
     "Narva",
     "Estonian singer",
     "Estonian music",
-    "Eesti laul",
+    "Estonian vocalist",
+    "Eesti laulja",
     "Eesti muusika",
+    "Eesti cover",
+    "Eesti demo",
     "Tallinn singer",
     "Tartu singer",
 ]
@@ -39,21 +42,17 @@ eesti_marksonad = {
     "eesti": 35,
     "estonia": 35,
     "estonian": 35,
-
     "tallinn": 30,
     "tartu": 30,
     "pärnu": 30,
     "parnu": 30,
-
     "viljandi": 25,
     "rakvere": 25,
     "narva": 25,
     "haapsalu": 25,
     "kuressaare": 25,
-
     "võru": 25,
     "voru": 25,
-
     "jõhvi": 25,
     "johvi": 25,
 }
@@ -63,9 +62,19 @@ eesti_marksonad = {
 # FILTRID
 # ------------------------------------------------
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
+    platvorm = st.selectbox(
+        "Platvorm",
+        [
+            "Mõlemad",
+            "SoundCloud",
+            "YouTube"
+        ]
+    )
+
+with col2:
     tulemusi_otsingu_kohta = st.slider(
         "Tulemusi iga otsingu kohta",
         5,
@@ -74,7 +83,7 @@ with col1:
         5
     )
 
-with col2:
+with col3:
     min_skoor = st.slider(
         "Minimaalne Eesti skoor",
         0,
@@ -83,7 +92,7 @@ with col2:
         5
     )
 
-with col3:
+with col4:
     periood = st.selectbox(
         "Kui uusi lugusid näidata?",
         [
@@ -97,13 +106,8 @@ with col3:
     )
 
 
-kontrolli_profiili = st.checkbox(
-    "🔍 Kontrolli artisti SoundCloudi profiili",
-    value=False
-)
-
 naita_teadmata = st.checkbox(
-    "Näita ka lugusid, mille kuupäev pole teada",
+    "Näita ka lugusid/videoid, mille kuupäev pole teada",
     value=False
 )
 
@@ -112,9 +116,9 @@ naita_teadmata = st.checkbox(
 # ABIFUNKTSIOONID
 # ------------------------------------------------
 
-def saa_kuupaev(lugu):
+def saa_kuupaev(info):
 
-    timestamp = lugu.get("timestamp")
+    timestamp = info.get("timestamp")
 
     if timestamp:
         try:
@@ -122,13 +126,23 @@ def saa_kuupaev(lugu):
         except:
             pass
 
-    upload_date = lugu.get("upload_date")
+    upload_date = info.get("upload_date")
 
     if upload_date:
         try:
             return datetime.strptime(
                 upload_date,
                 "%Y%m%d"
+            )
+        except:
+            pass
+
+    release_timestamp = info.get("release_timestamp")
+
+    if release_timestamp:
+        try:
+            return datetime.fromtimestamp(
+                release_timestamp
             )
         except:
             pass
@@ -153,19 +167,15 @@ def perioodi_paevad(valik):
     return None
 
 
-# ------------------------------------------------
-# LOO SKOOR
-# ------------------------------------------------
-
-def arvuta_skoor(lugu, otsing):
+def arvuta_skoor(info, otsing):
 
     tekst = " ".join([
-        str(lugu.get("title", "")),
-        str(lugu.get("uploader", "")),
-        str(lugu.get("description", "")),
-        str(lugu.get("genre", "")),
-        str(lugu.get("tags", "")),
-        str(otsing)
+        str(info.get("title", "")),
+        str(info.get("uploader", "")),
+        str(info.get("channel", "")),
+        str(info.get("description", "")),
+        str(info.get("genre", "")),
+        str(info.get("tags", "")),
     ]).lower()
 
     skoor = 0
@@ -181,69 +191,40 @@ def arvuta_skoor(lugu, otsing):
             juba_leitud.add(sona)
 
             põhjused.append(
-                f"Leitud märksõna: {sona}"
+                sona
             )
+
+    # Kui otsingu täpne fraas esineb metadata sees,
+    # anname väikese lisaboonuse.
+    if otsing.lower() in tekst:
+        skoor += 10
 
     return min(skoor, 100), põhjused
 
 
-# ------------------------------------------------
-# PROFIILI KONTROLL
-# ------------------------------------------------
+def platvormid_otsimiseks(valik):
 
-@st.cache_data(ttl=3600)
-def kontrolli_artisti_profiili(profiili_url):
+    if valik == "SoundCloud":
+        return ["SoundCloud"]
 
-    if not profiili_url:
-        return 0, [], ""
+    if valik == "YouTube":
+        return ["YouTube"]
 
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": True,
-        "playlistend": 1,
-    }
+    return [
+        "SoundCloud",
+        "YouTube"
+    ]
 
-    try:
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
+def otsingu_prefix(platvormi_nimi, arv):
 
-            info = ydl.extract_info(
-                profiili_url,
-                download=False
-            )
+    if platvormi_nimi == "SoundCloud":
+        return f"scsearch{arv}:"
 
-        if not info:
-            return 0, [], ""
+    if platvormi_nimi == "YouTube":
+        return f"ytsearch{arv}:"
 
-        tekst = " ".join([
-            str(info.get("title", "")),
-            str(info.get("uploader", "")),
-            str(info.get("description", "")),
-            str(info.get("location", "")),
-        ]).lower()
-
-        skoor = 0
-        põhjused = []
-
-        for sona in eesti_marksonad:
-
-            if sona in tekst:
-                skoor += 40
-                põhjused.append(
-                    f"Profiil: {sona}"
-                )
-
-        skoor = min(skoor, 100)
-
-        bio = str(
-            info.get("description", "")
-        )
-
-        return skoor, põhjused, bio
-
-    except Exception:
-        return 0, [], ""
+    return ""
 
 
 # ------------------------------------------------
@@ -256,153 +237,165 @@ if st.button(
     use_container_width=True
 ):
 
-    kõik_lood = []
+    kõik_tulemused = []
 
     ydl_opts = {
         "extract_flat": False,
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
+        "ignoreerrors": True,
     }
 
-    progress = st.progress(0)
+    kasutatavad_platvormid = platvormid_otsimiseks(
+        platvorm
+    )
 
+    otsingute_koguarv = (
+        len(otsingud)
+        * len(kasutatavad_platvormid)
+    )
+
+    tehtud = 0
+
+    progress = st.progress(0)
     status = st.empty()
 
     with yt_dlp.YoutubeDL(
         ydl_opts
     ) as ydl:
 
-        for nr, otsing in enumerate(
-            otsingud
-        ):
+        for platvormi_nimi in kasutatavad_platvormid:
 
-            status.write(
-                f"🔎 Otsin: **{otsing}**"
-            )
+            for otsing in otsingud:
 
-            try:
-
-                tulemus = ydl.extract_info(
-                    f"scsearch{tulemusi_otsingu_kohta}:{otsing}",
-                    download=False
+                status.write(
+                    f"🔎 {platvormi_nimi}: **{otsing}**"
                 )
 
-                if tulemus and "entries" in tulemus:
+                try:
 
-                    for lugu in tulemus["entries"]:
-
-                        if not lugu:
-                            continue
-
-                        url = (
-                            lugu.get("webpage_url")
-                            or lugu.get("url")
+                    query = (
+                        otsingu_prefix(
+                            platvormi_nimi,
+                            tulemusi_otsingu_kohta
                         )
+                        +
+                        otsing
+                    )
 
-                        if not url:
-                            continue
+                    tulemus = ydl.extract_info(
+                        query,
+                        download=False
+                    )
 
-                        artist = (
-                            lugu.get("uploader")
-                            or "Tundmatu artist"
-                        )
+                    if tulemus and "entries" in tulemus:
 
-                        profiili_url = (
-                            lugu.get("uploader_url")
-                            or lugu.get("channel_url")
-                        )
+                        for info in tulemus["entries"]:
 
-                        kuupaev = saa_kuupaev(
-                            lugu
-                        )
+                            if not info:
+                                continue
 
-                        loo_skoor, põhjused = arvuta_skoor(
-                            lugu,
-                            otsing
-                        )
+                            url = (
+                                info.get("webpage_url")
+                                or info.get("original_url")
+                                or info.get("url")
+                            )
 
-                        profiili_skoor = 0
-                        profiili_põhjused = []
-                        profiili_bio = ""
+                            if not url:
+                                continue
 
-                        # Profiilikontroll ei tohi põhiotsingut katkestada
-                        if kontrolli_profiili and profiili_url:
+                            artist = (
+                                info.get("uploader")
+                                or info.get("channel")
+                                or "Tundmatu artist"
+                            )
 
-                            try:
-                                (
-                                    profiili_skoor,
-                                    profiili_põhjused,
-                                    profiili_bio
-                                ) = kontrolli_artisti_profiili(
-                                    profiili_url
-                                )
+                            pealkiri = (
+                                info.get("title")
+                                or "Pealkiri puudub"
+                            )
 
-                            except Exception:
-                                profiili_skoor = 0
-                                profiili_põhjused = []
-                                profiili_bio = ""
+                            kuupaev = saa_kuupaev(
+                                info
+                            )
 
-                        lõplik_skoor = min(
-                            100,
-                            loo_skoor + profiili_skoor
-                        )
+                            skoor, põhjused = arvuta_skoor(
+                                info,
+                                otsing
+                            )
 
-                        kõik_põhjused = (
-                            põhjused
-                            + profiili_põhjused
-                        )
+                            kestus = info.get(
+                                "duration"
+                            )
 
-                        kõik_lood.append({
+                            vaatamised = info.get(
+                                "view_count"
+                            )
 
-                            "Artist":
-                                artist,
+                            jälgijad = info.get(
+                                "channel_follower_count"
+                            )
 
-                            "Lugu":
-                                lugu.get(
-                                    "title",
-                                    "Pealkiri puudub"
-                                ),
+                            profiili_url = (
+                                info.get("uploader_url")
+                                or info.get("channel_url")
+                            )
 
-                            "Link":
-                                url,
+                            kõik_tulemused.append({
 
-                            "Profiil":
-                                profiili_url,
+                                "Platvorm":
+                                    platvormi_nimi,
 
-                            "Kuupäev":
-                                kuupaev,
+                                "Artist":
+                                    artist,
 
-                            "Pikkus":
-                                lugu.get(
-                                    "duration"
-                                ),
+                                "Lugu":
+                                    pealkiri,
 
-                            "Skoor":
-                                lõplik_skoor,
+                                "Link":
+                                    url,
 
-                            "Põhjused":
-                                ", ".join(
-                                    kõik_põhjused
-                                ),
+                                "Profiil":
+                                    profiili_url,
 
-                            "Bio":
-                                profiili_bio,
+                                "Kuupäev":
+                                    kuupaev,
 
-                            "Otsing":
-                                otsing,
-                        })
+                                "Pikkus":
+                                    kestus,
 
-            except Exception as e:
+                                "Skoor":
+                                    skoor,
 
-                st.warning(
-                    f"Otsing '{otsing}' andis vea: {e}"
+                                "Põhjused":
+                                    ", ".join(
+                                        põhjused
+                                    ),
+
+                                "Vaatamised":
+                                    vaatamised,
+
+                                "Jälgijad":
+                                    jälgijad,
+
+                                "Otsing":
+                                    otsing,
+                            })
+
+                except Exception as e:
+
+                    st.warning(
+                        f"{platvormi_nimi} otsing "
+                        f"'{otsing}' andis vea: {e}"
+                    )
+
+                tehtud += 1
+
+                progress.progress(
+                    tehtud
+                    / otsingute_koguarv
                 )
-
-            progress.progress(
-                (nr + 1)
-                / len(otsingud)
-            )
 
     status.empty()
 
@@ -411,21 +404,22 @@ if st.button(
     # TULEMUSTE PUHASTAMINE
     # ------------------------------------------------
 
-    if kõik_lood:
+    if kõik_tulemused:
 
         df = pd.DataFrame(
-            kõik_lood
+            kõik_tulemused
         )
 
+        # Sama URL ainult üks kord
         df = df.drop_duplicates(
             subset=["Link"]
         )
 
         # Eesti skoori filter
         df = df[
-            df["Skoor"]
-            >= min_skoor
+            df["Skoor"] >= min_skoor
         ]
+
 
         # ------------------------------------------------
         # AJAFILTER
@@ -478,6 +472,7 @@ if st.button(
                 .notna()
             ]
 
+
         # ------------------------------------------------
         # SORTEERIMINE
         # ------------------------------------------------
@@ -496,25 +491,58 @@ if st.button(
 
 
         # ------------------------------------------------
-        # TULEMUSED
+        # KOKKUVÕTE
         # ------------------------------------------------
+
+        sc_arv = len(
+            df[
+                df["Platvorm"]
+                == "SoundCloud"
+            ]
+        )
+
+        yt_arv = len(
+            df[
+                df["Platvorm"]
+                == "YouTube"
+            ]
+        )
 
         st.success(
             f"🎯 Leidsin {len(df)} sobivat tulemust"
         )
 
-        st.write(
-            f"Periood: **{periood}** • "
-            f"Minimaalne Eesti skoor: **{min_skoor}%**"
-        )
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Kokku",
+                len(df)
+            )
+
+        with col2:
+            st.metric(
+                "☁️ SoundCloud",
+                sc_arv
+            )
+
+        with col3:
+            st.metric(
+                "▶️ YouTube",
+                yt_arv
+            )
 
         st.divider()
+
+
+        # ------------------------------------------------
+        # TULEMUSTE NÄITAMINE
+        # ------------------------------------------------
 
         if len(df) == 0:
 
             st.warning(
-                "Tulemused leiti, kuid ükski ei läbinud valitud filtreid. "
-                "Proovi Eesti skoor 0 ja periood Kõik."
+                "Tulemusi leiti, kuid ükski ei läbinud filtreid."
             )
 
         else:
@@ -530,8 +558,13 @@ if st.button(
 
                 with colA:
 
+                    if row["Platvorm"] == "YouTube":
+                        ikoon = "▶️"
+                    else:
+                        ikoon = "☁️"
+
                     st.subheader(
-                        f"{number}. "
+                        f"{number}. {ikoon} "
                         f"{row['Artist']} – "
                         f"{row['Lugu']}"
                     )
@@ -542,6 +575,12 @@ if st.button(
                         "🇪🇪 Eesti skoor",
                         f"{int(row['Skoor'])}%"
                     )
+
+
+                st.write(
+                    f"**Platvorm:** "
+                    f"{row['Platvorm']}"
+                )
 
 
                 # KUUPÄEV
@@ -586,29 +625,6 @@ if st.button(
                     )
 
 
-                # EESTI SEOSE PÕHJUS
-
-                if row["Põhjused"]:
-
-                    st.write(
-                        "🇪🇪 **Eesti seose põhjus:**",
-                        row["Põhjused"]
-                    )
-
-
-                # BIO
-
-                if row["Bio"]:
-
-                    with st.expander(
-                        "👤 Artisti profiili info"
-                    ):
-
-                        st.write(
-                            row["Bio"][:1000]
-                        )
-
-
                 # PIKKUS
 
                 if row["Pikkus"]:
@@ -629,16 +645,69 @@ if st.button(
                         pass
 
 
+                # VAATAMISED
+
+                if pd.notna(
+                    row["Vaatamised"]
+                ):
+
+                    try:
+
+                        st.write(
+                            "👁 Vaatamisi:",
+                            f"{int(row['Vaatamised']):,}"
+                        )
+
+                    except:
+                        pass
+
+
+                # JÄLGIJAD
+
+                if pd.notna(
+                    row["Jälgijad"]
+                ):
+
+                    try:
+
+                        st.write(
+                            "👥 Jälgijaid:",
+                            f"{int(row['Jälgijad']):,}"
+                        )
+
+                    except:
+                        pass
+
+
+                if row["Põhjused"]:
+
+                    st.write(
+                        "🇪🇪 Eesti seos:",
+                        row["Põhjused"]
+                    )
+
+
                 # LINGID
 
                 col1, col2 = st.columns(2)
 
                 with col1:
 
-                    st.link_button(
-                        "▶ Kuula lugu",
-                        row["Link"]
-                    )
+                    if row["Platvorm"] == "YouTube":
+
+                        st.link_button(
+                            "▶️ Vaata YouTube'is",
+                            row["Link"],
+                            use_container_width=True
+                        )
+
+                    else:
+
+                        st.link_button(
+                            "☁️ Kuula SoundCloudis",
+                            row["Link"],
+                            use_container_width=True
+                        )
 
                 with col2:
 
@@ -646,7 +715,8 @@ if st.button(
 
                         st.link_button(
                             "👤 Ava artist",
-                            row["Profiil"]
+                            row["Profiil"],
+                            use_container_width=True
                         )
 
                 st.caption(
@@ -659,6 +729,6 @@ if st.button(
     else:
 
         st.error(
-            "SoundCloudist ei saadud ühtegi tulemust. "
-            "Vaata ülal olevaid veateateid."
+            "SoundCloudist ega YouTube'ist "
+            "ei saadud ühtegi tulemust."
         )
