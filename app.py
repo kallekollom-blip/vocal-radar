@@ -54,6 +54,7 @@ vaade = st.sidebar.radio(
     "Vaade",
     [
         "🔎 Otsi uusi",
+        "🆕 Uued 7 päeva",
         "⭐ Lemmikud",
         "📩 Võta ühendust",
         "👀 Vaadatud",
@@ -61,6 +62,21 @@ vaade = st.sidebar.radio(
         "📋 Kõik salvestatud"
     ]
 )
+
+
+# ============================================================
+# STATUS ABI
+# ============================================================
+
+STATUS_LABELS = {
+    "new": "🆕 Uus",
+    "favorite": "⭐ Lemmik",
+    "seen": "👀 Vaadatud",
+    "contact": "📩 Võta ühendust",
+    "reject": "❌ Ei sobi"
+}
+
+STATUS_OPTIONS = list(STATUS_LABELS.keys())
 
 
 # ============================================================
@@ -73,6 +89,7 @@ def lae_salvestatud():
             supabase
             .table("artists")
             .select("*")
+            .order("created_at", desc=True)
             .execute()
         )
 
@@ -81,6 +98,27 @@ def lae_salvestatud():
     except Exception as e:
         st.error(f"Andmebaasi lugemise viga: {e}")
         return []
+
+
+def leia_track_url_jargi(track_url):
+
+    try:
+        response = (
+            supabase
+            .table("artists")
+            .select("*")
+            .eq("track_url", track_url)
+            .limit(1)
+            .execute()
+        )
+
+        if response.data:
+            return response.data[0]
+
+        return None
+
+    except:
+        return None
 
 
 def salvesta_artist(
@@ -95,13 +133,7 @@ def salvesta_artist(
 ):
 
     try:
-        olemas = (
-            supabase
-            .table("artists")
-            .select("id")
-            .eq("track_url", track_url)
-            .execute()
-        )
+        olemas = leia_track_url_jargi(track_url)
 
         data = {
             "artist_name": artist_name,
@@ -114,15 +146,13 @@ def salvesta_artist(
             "marked_by": marked_by
         }
 
-        if olemas.data:
-
-            artist_id = olemas.data[0]["id"]
+        if olemas:
 
             (
                 supabase
                 .table("artists")
                 .update(data)
-                .eq("id", artist_id)
+                .eq("id", olemas["id"])
                 .execute()
             )
 
@@ -139,10 +169,36 @@ def salvesta_artist(
 
     except Exception as e:
 
-        st.error(
-            f"Salvestamise viga: {e}"
+        st.error(f"Salvestamise viga: {e}")
+        return False
+
+
+def uuenda_salvestatud(
+    artist_id,
+    status,
+    note,
+    marked_by
+):
+
+    try:
+
+        (
+            supabase
+            .table("artists")
+            .update({
+                "status": status,
+                "note": note,
+                "marked_by": marked_by
+            })
+            .eq("id", artist_id)
+            .execute()
         )
 
+        return True
+
+    except Exception as e:
+
+        st.error(f"Uuendamise viga: {e}")
         return False
 
 
@@ -182,23 +238,17 @@ eesti_marksonad = {
     "eesti": 35,
     "estonia": 35,
     "estonian": 35,
-
     "tallinn": 30,
     "tartu": 30,
-
     "pärnu": 30,
     "parnu": 30,
-
     "viljandi": 25,
     "rakvere": 25,
     "narva": 25,
-
     "haapsalu": 25,
     "kuressaare": 25,
-
     "võru": 25,
     "voru": 25,
-
     "jõhvi": 25,
     "johvi": 25,
 }
@@ -213,42 +263,31 @@ def saa_kuupaev(info):
     timestamp = info.get("timestamp")
 
     if timestamp:
-
         try:
             return datetime.fromtimestamp(timestamp)
-
         except:
             pass
-
 
     upload_date = info.get("upload_date")
 
     if upload_date:
-
         try:
             return datetime.strptime(
                 upload_date,
                 "%Y%m%d"
             )
-
         except:
             pass
 
-
-    release_timestamp = info.get(
-        "release_timestamp"
-    )
+    release_timestamp = info.get("release_timestamp")
 
     if release_timestamp:
-
         try:
             return datetime.fromtimestamp(
                 release_timestamp
             )
-
         except:
             pass
-
 
     return None
 
@@ -291,19 +330,11 @@ def arvuta_skoor(info, otsing):
         if sona in tekst and sona not in juba_leitud:
 
             skoor += punktid
-
-            juba_leitud.add(
-                sona
-            )
-
-            pohjused.append(
-                sona
-            )
-
+            juba_leitud.add(sona)
+            pohjused.append(sona)
 
     if otsing.lower() in tekst:
         skoor += 10
-
 
     return min(skoor, 100), pohjused
 
@@ -355,6 +386,44 @@ def vorminda_number(number):
         return "?"
 
 
+def vaiksuse_skoor(row):
+
+    score = 0
+
+    views = row["Vaatamised"]
+    followers = row["Jälgijad"]
+
+    if pd.notna(views):
+
+        if views <= 1000:
+            score += 50
+
+        elif views <= 5000:
+            score += 40
+
+        elif views <= 10000:
+            score += 30
+
+        elif views <= 50000:
+            score += 10
+
+    if pd.notna(followers):
+
+        if followers <= 500:
+            score += 50
+
+        elif followers <= 2000:
+            score += 40
+
+        elif followers <= 5000:
+            score += 30
+
+        elif followers <= 10000:
+            score += 10
+
+    return min(score, 100)
+
+
 # ============================================================
 # SALVESTATUD ARTISTIDE VAATED
 # ============================================================
@@ -389,6 +458,36 @@ if vaade != "🔎 Otsi uusi":
         ]
 
 
+    if vaade == "🆕 Uued 7 päeva":
+
+        piir = datetime.now() - timedelta(days=7)
+
+        uus_list = []
+
+        for x in salvestatud:
+
+            created_at = x.get("created_at")
+
+            if not created_at:
+                continue
+
+            try:
+
+                dt = datetime.fromisoformat(
+                    created_at.replace("Z", "+00:00")
+                )
+
+                dt = dt.replace(tzinfo=None)
+
+                if dt >= piir:
+                    uus_list.append(x)
+
+            except:
+                pass
+
+        salvestatud = uus_list
+
+
     if not salvestatud:
 
         st.info(
@@ -408,27 +507,25 @@ if vaade != "🔎 Otsi uusi":
             f"{artist.get('platform', '')}"
         )
 
-        st.write(
-            f"**Staatus:** "
-            f"{artist.get('status', '')}"
+        current_status = (
+            artist.get("status")
+            or "new"
         )
 
         st.write(
-            f"**Märkis:** "
+            f"**Staatus:** "
+            f"{STATUS_LABELS.get(current_status, current_status)}"
+        )
+
+        st.write(
+            f"**Viimati märkis:** "
             f"{artist.get('marked_by', '')}"
         )
 
-
-        note = artist.get(
-            "note"
+        current_note = (
+            artist.get("note")
+            or ""
         )
-
-        if note:
-
-            st.info(
-                f"📝 {note}"
-            )
-
 
         col1, col2 = st.columns(2)
 
@@ -442,7 +539,6 @@ if vaade != "🔎 Otsi uusi":
                     use_container_width=True
                 )
 
-
         with col2:
 
             if artist.get("profile_url"):
@@ -453,6 +549,43 @@ if vaade != "🔎 Otsi uusi":
                     use_container_width=True
                 )
 
+        with st.expander(
+            "✏️ Muuda staatust või märkust"
+        ):
+
+            uus_status = st.selectbox(
+                "Staatus",
+                STATUS_OPTIONS,
+                index=(
+                    STATUS_OPTIONS.index(current_status)
+                    if current_status in STATUS_OPTIONS
+                    else 0
+                ),
+                format_func=lambda x: STATUS_LABELS[x],
+                key=f"saved_status_{artist['id']}"
+            )
+
+            uus_markus = st.text_area(
+                "Märkus",
+                value=current_note,
+                key=f"saved_note_{artist['id']}"
+            )
+
+            if st.button(
+                "💾 Salvesta muudatused",
+                key=f"saved_update_{artist['id']}",
+                use_container_width=True
+            ):
+
+                if uuenda_salvestatud(
+                    artist["id"],
+                    uus_status,
+                    uus_markus,
+                    marked_by
+                ):
+
+                    st.success("Uuendatud ✅")
+                    st.rerun()
 
         st.divider()
 
@@ -464,6 +597,20 @@ if vaade != "🔎 Otsi uusi":
 else:
 
     st.subheader("🔎 Otsi uusi artiste")
+
+    salvestatud = lae_salvestatud()
+
+    salvestatud_urlid = {
+        x.get("track_url")
+        for x in salvestatud
+        if x.get("track_url")
+    }
+
+    salvestatud_map = {
+        x.get("track_url"): x
+        for x in salvestatud
+        if x.get("track_url")
+    }
 
 
     col1, col2, col3, col4 = st.columns(4)
@@ -518,10 +665,6 @@ else:
         )
 
 
-    # --------------------------------------------------------
-    # VÄIKESE ARTISTI FILTRID
-    # --------------------------------------------------------
-
     st.write("### 🌱 Väikese artisti filtrid")
 
 
@@ -560,6 +703,12 @@ else:
     )
 
 
+    peida_juba_salvestatud = st.checkbox(
+        "🙈 Peida juba salvestatud lood",
+        value=True
+    )
+
+
     sortimine = st.selectbox(
         "Sorteeri",
         [
@@ -571,10 +720,6 @@ else:
         ]
     )
 
-
-    # ========================================================
-    # SEARCH BUTTON
-    # ========================================================
 
     if st.button(
         "🔎 OTSI",
@@ -762,10 +907,6 @@ else:
         status.empty()
 
 
-        # ====================================================
-        # DATAFRAME
-        # ====================================================
-
         if tulemused:
 
 
@@ -783,10 +924,6 @@ else:
                 df["Skoor"] >= min_skoor
             ]
 
-
-            # ------------------------------------------------
-            # AJAFILTER
-            # ------------------------------------------------
 
             paevad = perioodi_paevad(
                 periood
@@ -814,10 +951,6 @@ else:
                     df["Kuupäev"] >= piir
                 ]
 
-
-            # ------------------------------------------------
-            # VÄIKESE ARTISTI FILTER
-            # ------------------------------------------------
 
             if ainult_vaikesed:
 
@@ -873,52 +1006,13 @@ else:
                     ]
 
 
-            # ------------------------------------------------
-            # VÄIKSUSE SKOOR
-            # ------------------------------------------------
+            if peida_juba_salvestatud:
 
-            def vaiksuse_skoor(row):
-
-                score = 0
-
-                views = row["Vaatamised"]
-                followers = row["Jälgijad"]
-
-
-                if pd.notna(views):
-
-                    if views <= 1000:
-                        score += 50
-
-                    elif views <= 5000:
-                        score += 40
-
-                    elif views <= 10000:
-                        score += 30
-
-                    elif views <= 50000:
-                        score += 10
-
-
-                if pd.notna(followers):
-
-                    if followers <= 500:
-                        score += 50
-
-                    elif followers <= 2000:
-                        score += 40
-
-                    elif followers <= 5000:
-                        score += 30
-
-                    elif followers <= 10000:
-                        score += 10
-
-
-                return min(
-                    score,
-                    100
-                )
+                df = df[
+                    ~df["Link"].isin(
+                        salvestatud_urlid
+                    )
+                ]
 
 
             if len(df) > 0:
@@ -928,10 +1022,6 @@ else:
                     axis=1
                 )
 
-
-            # ------------------------------------------------
-            # SORT
-            # ------------------------------------------------
 
             if sortimine == "Uusimad enne":
 
@@ -978,19 +1068,16 @@ else:
                 )
 
 
-            # =================================================
-            # TULEMUSED
-            # =================================================
-
             st.success(
-                f"Leidsin {len(df)} tulemust."
+                f"Leidsin {len(df)} uut tulemust."
             )
 
 
             if len(df) == 0:
 
                 st.info(
-                    "Valitud filtritega tulemusi ei jäänud."
+                    "Kõik sobivad tulemused võivad olla juba salvestatud "
+                    "või filtrid on liiga ranged."
                 )
 
 
@@ -998,6 +1085,24 @@ else:
                 df.iterrows(),
                 start=1
             ):
+
+
+                olemas = salvestatud_map.get(
+                    row["Link"]
+                )
+
+
+                if olemas:
+
+                    status_text = STATUS_LABELS.get(
+                        olemas.get("status", "new"),
+                        olemas.get("status", "")
+                    )
+
+                    st.info(
+                        f"See lugu on juba salvestatud: "
+                        f"**{status_text}**"
+                    )
 
 
                 st.subheader(
@@ -1088,38 +1193,39 @@ else:
                         )
 
 
-                # =============================================
-                # SCOUTING
-                # =============================================
-
                 with st.expander(
                     "📝 Scouting"
                 ):
 
 
+                    default_status = (
+                        olemas.get("status", "new")
+                        if olemas
+                        else "new"
+                    )
+
+                    default_note = (
+                        olemas.get("note", "")
+                        if olemas
+                        else ""
+                    )
+
+
                     staatus = st.selectbox(
                         "Staatus",
-                        [
-                            "new",
-                            "favorite",
-                            "seen",
-                            "contact",
-                            "reject"
-                        ],
-                        format_func=lambda x: {
-                            "new": "🆕 Uus",
-                            "favorite": "⭐ Lemmik",
-                            "seen": "👀 Vaadatud",
-                            "contact": "📩 Võta ühendust",
-                            "reject": "❌ Ei sobi"
-                        }[x],
-                        key=f"status_{nr}"
+                        STATUS_OPTIONS,
+                        index=STATUS_OPTIONS.index(
+                            default_status
+                        ),
+                        format_func=lambda x: STATUS_LABELS[x],
+                        key=f"status_{row['Link']}"
                     )
 
 
                     markus = st.text_area(
                         "Märkus",
-                        key=f"note_{nr}",
+                        value=default_note,
+                        key=f"note_{row['Link']}",
                         placeholder=(
                             "Näiteks: hea vokaal, "
                             "sobib DnB refrääni..."
@@ -1129,7 +1235,7 @@ else:
 
                     if st.button(
                         "💾 Salvesta",
-                        key=f"save_{nr}",
+                        key=f"save_{row['Link']}",
                         use_container_width=True
                     ):
 
@@ -1153,6 +1259,8 @@ else:
                             st.success(
                                 "Salvestatud ✅"
                             )
+
+                            st.rerun()
 
 
                 st.divider()
