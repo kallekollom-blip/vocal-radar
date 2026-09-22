@@ -1,12 +1,15 @@
 import streamlit as st
 import yt_dlp
 import pandas as pd
+import requests
+import base64
+
 from datetime import datetime, timedelta
 from supabase import create_client
 
 
 # ============================================================
-# LEHE SEADED
+# PAGE
 # ============================================================
 
 st.set_page_config(
@@ -16,7 +19,7 @@ st.set_page_config(
 )
 
 st.title("🎤 Estonian Vocal Radar")
-st.caption("SoundCloud + YouTube artistide scouting")
+st.caption("SoundCloud + YouTube + Spotify artistide scouting")
 
 
 # ============================================================
@@ -35,7 +38,98 @@ supabase = get_supabase()
 
 
 # ============================================================
-# KASUTAJA
+# SPOTIFY
+# ============================================================
+
+@st.cache_data(ttl=300)
+def spotify_token():
+
+    client_id = st.secrets["spotify"]["client_id"]
+    client_secret = st.secrets["spotify"]["client_secret"]
+
+    credentials = f"{client_id}:{client_secret}"
+
+    encoded = base64.b64encode(
+        credentials.encode()
+    ).decode()
+
+    response = requests.post(
+        "https://accounts.spotify.com/api/token",
+        headers={
+            "Authorization": f"Basic {encoded}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        data={
+            "grant_type": "client_credentials"
+        },
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    return response.json()["access_token"]
+
+
+def spotify_search(query, result_count):
+
+    token = spotify_token()
+
+    # Spotify max 10 per request
+    wanted = min(result_count, 30)
+
+    results = []
+
+    offset = 0
+
+    while len(results) < wanted:
+
+        batch_size = min(
+            10,
+            wanted - len(results)
+        )
+
+        response = requests.get(
+            "https://api.spotify.com/v1/search",
+            headers={
+                "Authorization": f"Bearer {token}"
+            },
+            params={
+                "q": query,
+                "type": "track",
+                "market": "EE",
+                "limit": batch_size,
+                "offset": offset
+            },
+            timeout=20
+        )
+
+        if response.status_code == 429:
+            break
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        tracks = (
+            data.get("tracks", {})
+            .get("items", [])
+        )
+
+        if not tracks:
+            break
+
+        results.extend(tracks)
+
+        offset += len(tracks)
+
+        if len(tracks) < batch_size:
+            break
+
+    return results
+
+
+# ============================================================
+# USER
 # ============================================================
 
 marked_by = st.sidebar.radio(
@@ -43,11 +137,13 @@ marked_by = st.sidebar.radio(
     ["Kalle", "Vahur"]
 )
 
-st.sidebar.write(f"👤 Aktiivne kasutaja: **{marked_by}**")
+st.sidebar.write(
+    f"👤 Aktiivne kasutaja: **{marked_by}**"
+)
 
 
 # ============================================================
-# NAVIGATSIOON
+# NAVIGATION
 # ============================================================
 
 vaade = st.sidebar.radio(
@@ -64,10 +160,6 @@ vaade = st.sidebar.radio(
 )
 
 
-# ============================================================
-# STATUS ABI
-# ============================================================
-
 STATUS_LABELS = {
     "new": "🆕 Uus",
     "favorite": "⭐ Lemmik",
@@ -76,38 +168,53 @@ STATUS_LABELS = {
     "reject": "❌ Ei sobi"
 }
 
-STATUS_OPTIONS = list(STATUS_LABELS.keys())
+STATUS_OPTIONS = list(
+    STATUS_LABELS.keys()
+)
 
 
 # ============================================================
-# ANDMEBAASI FUNKTSIOONID
+# DATABASE
 # ============================================================
 
 def lae_salvestatud():
+
     try:
+
         response = (
             supabase
             .table("artists")
             .select("*")
-            .order("created_at", desc=True)
+            .order(
+                "created_at",
+                desc=True
+            )
             .execute()
         )
 
         return response.data or []
 
     except Exception as e:
-        st.error(f"Andmebaasi lugemise viga: {e}")
+
+        st.error(
+            f"Andmebaasi lugemise viga: {e}"
+        )
+
         return []
 
 
 def leia_track_url_jargi(track_url):
 
     try:
+
         response = (
             supabase
             .table("artists")
             .select("*")
-            .eq("track_url", track_url)
+            .eq(
+                "track_url",
+                track_url
+            )
             .limit(1)
             .execute()
         )
@@ -133,7 +240,10 @@ def salvesta_artist(
 ):
 
     try:
-        olemas = leia_track_url_jargi(track_url)
+
+        olemas = leia_track_url_jargi(
+            track_url
+        )
 
         data = {
             "artist_name": artist_name,
@@ -152,7 +262,10 @@ def salvesta_artist(
                 supabase
                 .table("artists")
                 .update(data)
-                .eq("id", olemas["id"])
+                .eq(
+                    "id",
+                    olemas["id"]
+                )
                 .execute()
             )
 
@@ -169,7 +282,10 @@ def salvesta_artist(
 
     except Exception as e:
 
-        st.error(f"Salvestamise viga: {e}")
+        st.error(
+            f"Salvestamise viga: {e}"
+        )
+
         return False
 
 
@@ -190,7 +306,10 @@ def uuenda_salvestatud(
                 "note": note,
                 "marked_by": marked_by
             })
-            .eq("id", artist_id)
+            .eq(
+                "id",
+                artist_id
+            )
             .execute()
         )
 
@@ -198,12 +317,15 @@ def uuenda_salvestatud(
 
     except Exception as e:
 
-        st.error(f"Uuendamise viga: {e}")
+        st.error(
+            f"Uuendamise viga: {e}"
+        )
+
         return False
 
 
 # ============================================================
-# OTSINGU SEADED
+# SEARCH SETTINGS
 # ============================================================
 
 otsingud = [
@@ -230,7 +352,7 @@ otsingud = [
     "Tallinn vocalist",
 
     "Tartu singer",
-    "Tartu vocalist",
+    "Tartu vocalist"
 ]
 
 
@@ -255,41 +377,94 @@ eesti_marksonad = {
 
 
 # ============================================================
-# ABIFUNKTSIOONID
+# HELPERS
 # ============================================================
 
 def saa_kuupaev(info):
 
-    timestamp = info.get("timestamp")
+    timestamp = info.get(
+        "timestamp"
+    )
 
     if timestamp:
+
         try:
-            return datetime.fromtimestamp(timestamp)
+            return datetime.fromtimestamp(
+                timestamp
+            )
+
         except:
             pass
 
-    upload_date = info.get("upload_date")
+
+    upload_date = info.get(
+        "upload_date"
+    )
 
     if upload_date:
+
         try:
+
             return datetime.strptime(
                 upload_date,
                 "%Y%m%d"
             )
+
         except:
             pass
 
-    release_timestamp = info.get("release_timestamp")
-
-    if release_timestamp:
-        try:
-            return datetime.fromtimestamp(
-                release_timestamp
-            )
-        except:
-            pass
 
     return None
+
+
+def spotify_date(track):
+
+    try:
+
+        date_string = (
+            track
+            .get("album", {})
+            .get("release_date")
+        )
+
+        precision = (
+            track
+            .get("album", {})
+            .get(
+                "release_date_precision",
+                "day"
+            )
+        )
+
+        if not date_string:
+            return None
+
+
+        if precision == "day":
+
+            return datetime.strptime(
+                date_string,
+                "%Y-%m-%d"
+            )
+
+
+        if precision == "month":
+
+            return datetime.strptime(
+                date_string,
+                "%Y-%m"
+            )
+
+
+        if precision == "year":
+
+            return datetime.strptime(
+                date_string,
+                "%Y"
+            )
+
+    except:
+        return None
 
 
 def perioodi_paevad(valik):
@@ -320,26 +495,73 @@ def arvuta_skoor(info, otsing):
         str(info.get("tags", "")),
     ]).lower()
 
+    return score_text(
+        tekst,
+        otsing
+    )
+
+
+def spotify_score(
+    artist,
+    track_name,
+    album_name,
+    query
+):
+
+    tekst = " ".join([
+        artist,
+        track_name,
+        album_name
+    ]).lower()
+
+    return score_text(
+        tekst,
+        query
+    )
+
+
+def score_text(
+    tekst,
+    query
+):
+
     skoor = 0
     pohjused = []
 
-    juba_leitud = set()
+    juba = set()
 
     for sona, punktid in eesti_marksonad.items():
 
-        if sona in tekst and sona not in juba_leitud:
+        if (
+            sona in tekst
+            and
+            sona not in juba
+        ):
 
             skoor += punktid
-            juba_leitud.add(sona)
-            pohjused.append(sona)
 
-    if otsing.lower() in tekst:
+            juba.add(
+                sona
+            )
+
+            pohjused.append(
+                sona
+            )
+
+
+    if query.lower() in tekst:
         skoor += 10
 
-    return min(skoor, 100), pohjused
+
+    return (
+        min(skoor, 100),
+        pohjused
+    )
 
 
-def platvormid_otsimiseks(valik):
+def platvormid_otsimiseks(
+    valik
+):
 
     if valik == "SoundCloud":
         return ["SoundCloud"]
@@ -347,22 +569,40 @@ def platvormid_otsimiseks(valik):
     if valik == "YouTube":
         return ["YouTube"]
 
+    if valik == "Spotify":
+        return ["Spotify"]
+
+    if valik == "SoundCloud + YouTube":
+        return [
+            "SoundCloud",
+            "YouTube"
+        ]
+
     return [
         "SoundCloud",
-        "YouTube"
+        "YouTube",
+        "Spotify"
     ]
 
 
 def otsingu_prefix(
-    platvormi_nimi,
-    arv
+    platform,
+    count
 ):
 
-    if platvormi_nimi == "SoundCloud":
-        return f"scsearch{arv}:"
+    if platform == "SoundCloud":
 
-    if platvormi_nimi == "YouTube":
-        return f"ytsearch{arv}:"
+        return (
+            f"scsearch{count}:"
+        )
+
+
+    if platform == "YouTube":
+
+        return (
+            f"ytsearch{count}:"
+        )
+
 
     return ""
 
@@ -374,10 +614,16 @@ def vorminda_number(number):
         number = int(number)
 
         if number >= 1_000_000:
-            return f"{number / 1_000_000:.1f}M"
+
+            return (
+                f"{number / 1_000_000:.1f}M"
+            )
 
         if number >= 1000:
-            return f"{number / 1000:.1f}K"
+
+            return (
+                f"{number / 1000:.1f}K"
+            )
 
         return str(number)
 
@@ -390,8 +636,14 @@ def vaiksuse_skoor(row):
 
     score = 0
 
-    views = row["Vaatamised"]
-    followers = row["Jälgijad"]
+    views = row[
+        "Vaatamised"
+    ]
+
+    followers = row[
+        "Jälgijad"
+    ]
+
 
     if pd.notna(views):
 
@@ -407,6 +659,7 @@ def vaiksuse_skoor(row):
         elif views <= 50000:
             score += 10
 
+
     if pd.notna(followers):
 
         if followers <= 500:
@@ -421,18 +674,27 @@ def vaiksuse_skoor(row):
         elif followers <= 10000:
             score += 10
 
-    return min(score, 100)
+
+    return min(
+        score,
+        100
+    )
 
 
 # ============================================================
-# SALVESTATUD ARTISTIDE VAATED
+# SAVED VIEWS
 # ============================================================
 
 if vaade != "🔎 Otsi uusi":
 
-    st.subheader(vaade)
+    st.subheader(
+        vaade
+    )
 
-    salvestatud = lae_salvestatud()
+    salvestatud = (
+        lae_salvestatud()
+    )
+
 
     if vaade == "⭐ Lemmikud":
         soovitud_status = "favorite"
@@ -453,20 +715,32 @@ if vaade != "🔎 Otsi uusi":
     if soovitud_status:
 
         salvestatud = [
-            x for x in salvestatud
-            if x.get("status") == soovitud_status
+
+            x
+            for x in salvestatud
+
+            if x.get("status")
+            ==
+            soovitud_status
+
         ]
 
 
     if vaade == "🆕 Uued 7 päeva":
 
-        piir = datetime.now() - timedelta(days=7)
+        piir = (
+            datetime.now()
+            -
+            timedelta(days=7)
+        )
 
         uus_list = []
 
         for x in salvestatud:
 
-            created_at = x.get("created_at")
+            created_at = x.get(
+                "created_at"
+            )
 
             if not created_at:
                 continue
@@ -474,13 +748,21 @@ if vaade != "🔎 Otsi uusi":
             try:
 
                 dt = datetime.fromisoformat(
-                    created_at.replace("Z", "+00:00")
+                    created_at.replace(
+                        "Z",
+                        "+00:00"
+                    )
                 )
 
-                dt = dt.replace(tzinfo=None)
+                dt = dt.replace(
+                    tzinfo=None
+                )
 
                 if dt >= piir:
-                    uus_list.append(x)
+
+                    uus_list.append(
+                        x
+                    )
 
             except:
                 pass
@@ -509,7 +791,8 @@ if vaade != "🔎 Otsi uusi":
 
         current_status = (
             artist.get("status")
-            or "new"
+            or
+            "new"
         )
 
         st.write(
@@ -524,14 +807,21 @@ if vaade != "🔎 Otsi uusi":
 
         current_note = (
             artist.get("note")
-            or ""
+            or
+            ""
         )
 
-        col1, col2 = st.columns(2)
+
+        col1, col2 = (
+            st.columns(2)
+        )
+
 
         with col1:
 
-            if artist.get("track_url"):
+            if artist.get(
+                "track_url"
+            ):
 
                 st.link_button(
                     "▶ Ava lugu",
@@ -539,15 +829,19 @@ if vaade != "🔎 Otsi uusi":
                     use_container_width=True
                 )
 
+
         with col2:
 
-            if artist.get("profile_url"):
+            if artist.get(
+                "profile_url"
+            ):
 
                 st.link_button(
                     "👤 Ava artist",
                     artist["profile_url"],
                     use_container_width=True
                 )
+
 
         with st.expander(
             "✏️ Muuda staatust või märkust"
@@ -557,23 +851,36 @@ if vaade != "🔎 Otsi uusi":
                 "Staatus",
                 STATUS_OPTIONS,
                 index=(
-                    STATUS_OPTIONS.index(current_status)
-                    if current_status in STATUS_OPTIONS
+                    STATUS_OPTIONS.index(
+                        current_status
+                    )
+                    if current_status
+                    in STATUS_OPTIONS
                     else 0
                 ),
-                format_func=lambda x: STATUS_LABELS[x],
-                key=f"saved_status_{artist['id']}"
+                format_func=lambda x:
+                    STATUS_LABELS[x],
+                key=(
+                    f"saved_status_"
+                    f"{artist['id']}"
+                )
             )
 
             uus_markus = st.text_area(
                 "Märkus",
                 value=current_note,
-                key=f"saved_note_{artist['id']}"
+                key=(
+                    f"saved_note_"
+                    f"{artist['id']}"
+                )
             )
 
             if st.button(
                 "💾 Salvesta muudatused",
-                key=f"saved_update_{artist['id']}",
+                key=(
+                    f"saved_update_"
+                    f"{artist['id']}"
+                ),
                 use_container_width=True
             ):
 
@@ -584,36 +891,53 @@ if vaade != "🔎 Otsi uusi":
                     marked_by
                 ):
 
-                    st.success("Uuendatud ✅")
+                    st.success(
+                        "Uuendatud ✅"
+                    )
+
                     st.rerun()
 
         st.divider()
 
 
 # ============================================================
-# OTSING
+# SEARCH
 # ============================================================
 
 else:
 
-    st.subheader("🔎 Otsi uusi artiste")
+    st.subheader(
+        "🔎 Otsi uusi artiste"
+    )
 
-    salvestatud = lae_salvestatud()
+    salvestatud = (
+        lae_salvestatud()
+    )
 
     salvestatud_urlid = {
+
         x.get("track_url")
+
         for x in salvestatud
+
         if x.get("track_url")
+
     }
 
     salvestatud_map = {
+
         x.get("track_url"): x
+
         for x in salvestatud
+
         if x.get("track_url")
+
     }
 
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 = (
+        st.columns(4)
+    )
 
 
     with col1:
@@ -621,21 +945,25 @@ else:
         platvorm = st.selectbox(
             "Platvorm",
             [
-                "Mõlemad",
+                "Kõik 3",
+                "SoundCloud + YouTube",
                 "SoundCloud",
-                "YouTube"
+                "YouTube",
+                "Spotify"
             ]
         )
 
 
     with col2:
 
-        tulemusi_otsingu_kohta = st.slider(
-            "Tulemusi iga otsingu kohta",
-            5,
-            30,
-            10,
-            5
+        tulemusi_otsingu_kohta = (
+            st.slider(
+                "Tulemusi iga otsingu kohta",
+                5,
+                30,
+                10,
+                5
+            )
         )
 
 
@@ -665,10 +993,14 @@ else:
         )
 
 
-    st.write("### 🌱 Väikese artisti filtrid")
+    st.write(
+        "### 🌱 Väikese artisti filtrid"
+    )
 
 
-    col5, col6 = st.columns(2)
+    col5, col6 = (
+        st.columns(2)
+    )
 
 
     with col5:
@@ -703,9 +1035,11 @@ else:
     )
 
 
-    peida_juba_salvestatud = st.checkbox(
-        "🙈 Peida juba salvestatud lood",
-        value=True
+    peida_juba_salvestatud = (
+        st.checkbox(
+            "🙈 Peida juba salvestatud lood",
+            value=True
+        )
     )
 
 
@@ -730,15 +1064,6 @@ else:
         tulemused = []
 
 
-        opts = {
-            "extract_flat": False,
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "ignoreerrors": True,
-        }
-
-
         kasutatavad_platvormid = (
             platvormid_otsimiseks(
                 platvorm
@@ -752,160 +1077,382 @@ else:
             len(kasutatavad_platvormid)
         )
 
-
         tehtud = 0
 
-        progress = st.progress(0)
+        progress = (
+            st.progress(0)
+        )
 
-        status = st.empty()
-
-
-        with yt_dlp.YoutubeDL(
-            opts
-        ) as ydl:
-
-
-            for platvormi_nimi in kasutatavad_platvormid:
+        status = (
+            st.empty()
+        )
 
 
-                for otsing in otsingud:
+        # ====================================================
+        # YOUTUBE + SOUNDCLOUD
+        # ====================================================
+
+        opts = {
+            "extract_flat": False,
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "ignoreerrors": True
+        }
 
 
-                    status.write(
-                        f"🔎 {platvormi_nimi}: "
-                        f"**{otsing}**"
-                    )
+        if (
+            "YouTube"
+            in kasutatavad_platvormid
+            or
+            "SoundCloud"
+            in kasutatavad_platvormid
+        ):
+
+            with yt_dlp.YoutubeDL(
+                opts
+            ) as ydl:
 
 
-                    try:
+                for platform_name in (
+                    kasutatavad_platvormid
+                ):
 
-                        query = (
-                            otsingu_prefix(
-                                platvormi_nimi,
-                                tulemusi_otsingu_kohta
+                    if platform_name == "Spotify":
+                        continue
+
+
+                    for otsing in otsingud:
+
+                        status.write(
+                            f"🔎 "
+                            f"{platform_name}: "
+                            f"**{otsing}**"
+                        )
+
+
+                        try:
+
+                            query = (
+                                otsingu_prefix(
+                                    platform_name,
+                                    tulemusi_otsingu_kohta
+                                )
+                                +
+                                otsing
                             )
-                            +
-                            otsing
-                        )
 
 
-                        tulemus = ydl.extract_info(
-                            query,
-                            download=False
-                        )
-
-
-                        if tulemus and "entries" in tulemus:
-
-
-                            for info in tulemus["entries"]:
-
-
-                                if not info:
-                                    continue
-
-
-                                url = (
-                                    info.get("webpage_url")
-                                    or
-                                    info.get("original_url")
-                                    or
-                                    info.get("url")
+                            tulemus = (
+                                ydl.extract_info(
+                                    query,
+                                    download=False
                                 )
+                            )
 
 
-                                if not url:
-                                    continue
+                            if (
+                                tulemus
+                                and
+                                "entries"
+                                in tulemus
+                            ):
+
+                                for info in (
+                                    tulemus["entries"]
+                                ):
+
+                                    if not info:
+                                        continue
 
 
-                                artist = (
-                                    info.get("uploader")
-                                    or
-                                    info.get("channel")
-                                    or
-                                    "Tundmatu artist"
-                                )
-
-
-                                title = (
-                                    info.get("title")
-                                    or
-                                    "Pealkiri puudub"
-                                )
-
-
-                                kuupaev = saa_kuupaev(
-                                    info
-                                )
-
-
-                                skoor, pohjused = arvuta_skoor(
-                                    info,
-                                    otsing
-                                )
-
-
-                                tulemused.append({
-
-                                    "Platvorm":
-                                        platvormi_nimi,
-
-                                    "Artist":
-                                        artist,
-
-                                    "Lugu":
-                                        title,
-
-                                    "Link":
-                                        url,
-
-                                    "Profiil":
-                                        (
-                                            info.get("uploader_url")
-                                            or
-                                            info.get("channel_url")
-                                        ),
-
-                                    "Kuupäev":
-                                        kuupaev,
-
-                                    "Pikkus":
-                                        info.get("duration"),
-
-                                    "Skoor":
-                                        skoor,
-
-                                    "Põhjused":
-                                        ", ".join(pohjused),
-
-                                    "Vaatamised":
-                                        info.get("view_count"),
-
-                                    "Jälgijad":
+                                    url = (
                                         info.get(
-                                            "channel_follower_count"
-                                        ),
+                                            "webpage_url"
+                                        )
+                                        or
+                                        info.get(
+                                            "original_url"
+                                        )
+                                        or
+                                        info.get(
+                                            "url"
+                                        )
+                                    )
 
-                                })
+
+                                    if not url:
+                                        continue
 
 
-                    except Exception as e:
+                                    artist = (
+                                        info.get(
+                                            "uploader"
+                                        )
+                                        or
+                                        info.get(
+                                            "channel"
+                                        )
+                                        or
+                                        "Tundmatu artist"
+                                    )
 
-                        st.warning(
-                            f"{platvormi_nimi}: "
-                            f"{otsing}: {e}"
+
+                                    title = (
+                                        info.get(
+                                            "title"
+                                        )
+                                        or
+                                        "Pealkiri puudub"
+                                    )
+
+
+                                    kuupaev = (
+                                        saa_kuupaev(
+                                            info
+                                        )
+                                    )
+
+
+                                    skoor, pohjused = (
+                                        arvuta_skoor(
+                                            info,
+                                            otsing
+                                        )
+                                    )
+
+
+                                    tulemused.append({
+                                        "Platvorm":
+                                            platform_name,
+
+                                        "Artist":
+                                            artist,
+
+                                        "Lugu":
+                                            title,
+
+                                        "Link":
+                                            url,
+
+                                        "Profiil":
+                                            (
+                                                info.get(
+                                                    "uploader_url"
+                                                )
+                                                or
+                                                info.get(
+                                                    "channel_url"
+                                                )
+                                            ),
+
+                                        "Kuupäev":
+                                            kuupaev,
+
+                                        "Skoor":
+                                            skoor,
+
+                                        "Põhjused":
+                                            ", ".join(
+                                                pohjused
+                                            ),
+
+                                        "Vaatamised":
+                                            info.get(
+                                                "view_count"
+                                            ),
+
+                                        "Jälgijad":
+                                            info.get(
+                                                "channel_follower_count"
+                                            )
+                                    })
+
+
+                        except Exception as e:
+
+                            st.warning(
+                                f"{platform_name}: "
+                                f"{otsing}: {e}"
+                            )
+
+
+                        tehtud += 1
+
+                        progress.progress(
+                            tehtud / koguarv
                         )
 
 
-                    tehtud += 1
+        # ====================================================
+        # SPOTIFY
+        # ====================================================
 
-                    progress.progress(
-                        tehtud / koguarv
+        if "Spotify" in kasutatavad_platvormid:
+
+
+            for otsing in otsingud:
+
+
+                status.write(
+                    f"🟢 Spotify: "
+                    f"**{otsing}**"
+                )
+
+
+                try:
+
+                    tracks = spotify_search(
+                        otsing,
+                        tulemusi_otsingu_kohta
                     )
+
+
+                    for track in tracks:
+
+
+                        artists = track.get(
+                            "artists",
+                            []
+                        )
+
+
+                        artist_name = (
+                            artists[0].get(
+                                "name",
+                                "Tundmatu artist"
+                            )
+                            if artists
+                            else
+                            "Tundmatu artist"
+                        )
+
+
+                        profile_url = None
+
+                        if artists:
+
+                            profile_url = (
+                                artists[0]
+                                .get(
+                                    "external_urls",
+                                    {}
+                                )
+                                .get(
+                                    "spotify"
+                                )
+                            )
+
+
+                        title = track.get(
+                            "name",
+                            "Pealkiri puudub"
+                        )
+
+
+                        album_name = (
+                            track.get(
+                                "album",
+                                {}
+                            )
+                            .get(
+                                "name",
+                                ""
+                            )
+                        )
+
+
+                        track_url = (
+                            track.get(
+                                "external_urls",
+                                {}
+                            )
+                            .get(
+                                "spotify"
+                            )
+                        )
+
+
+                        if not track_url:
+                            continue
+
+
+                        kuupaev = (
+                            spotify_date(
+                                track
+                            )
+                        )
+
+
+                        skoor, pohjused = (
+                            spotify_score(
+                                artist_name,
+                                title,
+                                album_name,
+                                otsing
+                            )
+                        )
+
+
+                        tulemused.append({
+                            "Platvorm":
+                                "Spotify",
+
+                            "Artist":
+                                artist_name,
+
+                            "Lugu":
+                                title,
+
+                            "Link":
+                                track_url,
+
+                            "Profiil":
+                                profile_url,
+
+                            "Kuupäev":
+                                kuupaev,
+
+                            "Skoor":
+                                skoor,
+
+                            "Põhjused":
+                                ", ".join(
+                                    pohjused
+                                ),
+
+                            # Spotify ei anna
+                            # YouTube'i stiilis
+                            # vaatamiste arvu.
+                            "Vaatamised":
+                                None,
+
+                            "Jälgijad":
+                                None
+                        })
+
+
+                except Exception as e:
+
+                    st.warning(
+                        f"Spotify: "
+                        f"{otsing}: {e}"
+                    )
+
+
+                tehtud += 1
+
+                progress.progress(
+                    tehtud / koguarv
+                )
 
 
         status.empty()
 
+
+        # ====================================================
+        # FILTERING
+        # ====================================================
 
         if tulemused:
 
@@ -921,12 +1468,16 @@ else:
 
 
             df = df[
-                df["Skoor"] >= min_skoor
+                df["Skoor"]
+                >=
+                min_skoor
             ]
 
 
-            paevad = perioodi_paevad(
-                periood
+            paevad = (
+                perioodi_paevad(
+                    periood
+                )
             )
 
 
@@ -943,12 +1494,15 @@ else:
 
 
                 df = df[
-                    df["Kuupäev"].notna()
+                    df["Kuupäev"]
+                    .notna()
                 ]
 
 
                 df = df[
-                    df["Kuupäev"] >= piir
+                    df["Kuupäev"]
+                    >=
+                    piir
                 ]
 
 
@@ -960,20 +1514,28 @@ else:
 
                     df = df[
                         (
-                            df["Vaatamised"].isna()
+                            df[
+                                "Vaatamised"
+                            ].isna()
                             |
                             (
-                                df["Vaatamised"]
+                                df[
+                                    "Vaatamised"
+                                ]
                                 <=
                                 max_vaatamised
                             )
                         )
                         &
                         (
-                            df["Jälgijad"].isna()
+                            df[
+                                "Jälgijad"
+                            ].isna()
                             |
                             (
-                                df["Jälgijad"]
+                                df[
+                                    "Jälgijad"
+                                ]
                                 <=
                                 max_jalgijad
                             )
@@ -985,24 +1547,13 @@ else:
 
 
                     df = df[
-                        df["Vaatamised"].notna()
+                        df[
+                            "Vaatamised"
+                        ].notna()
                         &
-                        df["Jälgijad"].notna()
-                    ]
-
-
-                    df = df[
-                        (
-                            df["Vaatamised"]
-                            <=
-                            max_vaatamised
-                        )
-                        &
-                        (
-                            df["Jälgijad"]
-                            <=
-                            max_jalgijad
-                        )
+                        df[
+                            "Jälgijad"
+                        ].notna()
                     ]
 
 
@@ -1017,17 +1568,29 @@ else:
 
             if len(df) > 0:
 
-                df["Väiksuse skoor"] = df.apply(
+                df[
+                    "Väiksuse skoor"
+                ] = df.apply(
                     vaiksuse_skoor,
                     axis=1
                 )
 
 
+            # =================================================
+            # SORT
+            # =================================================
+
             if sortimine == "Uusimad enne":
 
                 df = df.sort_values(
-                    ["Kuupäev", "Skoor"],
-                    ascending=[False, False],
+                    [
+                        "Kuupäev",
+                        "Skoor"
+                    ],
+                    ascending=[
+                        False,
+                        False
+                    ],
                     na_position="last"
                 )
 
@@ -1035,8 +1598,14 @@ else:
             elif sortimine == "Kõrgeim Eesti skoor":
 
                 df = df.sort_values(
-                    ["Skoor", "Kuupäev"],
-                    ascending=[False, False],
+                    [
+                        "Skoor",
+                        "Kuupäev"
+                    ],
+                    ascending=[
+                        False,
+                        False
+                    ],
                     na_position="last"
                 )
 
@@ -1044,8 +1613,14 @@ else:
             elif sortimine == "Kõige vähem vaatamisi":
 
                 df = df.sort_values(
-                    ["Vaatamised", "Kuupäev"],
-                    ascending=[True, False],
+                    [
+                        "Vaatamised",
+                        "Kuupäev"
+                    ],
+                    ascending=[
+                        True,
+                        False
+                    ],
                     na_position="last"
                 )
 
@@ -1053,8 +1628,14 @@ else:
             elif sortimine == "Kõige vähem jälgijaid":
 
                 df = df.sort_values(
-                    ["Jälgijad", "Kuupäev"],
-                    ascending=[True, False],
+                    [
+                        "Jälgijad",
+                        "Kuupäev"
+                    ],
+                    ascending=[
+                        True,
+                        False
+                    ],
                     na_position="last"
                 )
 
@@ -1062,22 +1643,34 @@ else:
             else:
 
                 df = df.sort_values(
-                    ["Väiksuse skoor", "Kuupäev"],
-                    ascending=[False, False],
+                    [
+                        "Väiksuse skoor",
+                        "Kuupäev"
+                    ],
+                    ascending=[
+                        False,
+                        False
+                    ],
                     na_position="last"
                 )
 
 
+            # =================================================
+            # RESULTS
+            # =================================================
+
             st.success(
-                f"Leidsin {len(df)} uut tulemust."
+                f"Leidsin "
+                f"{len(df)} "
+                f"uut tulemust."
             )
 
 
             if len(df) == 0:
 
                 st.info(
-                    "Kõik sobivad tulemused võivad olla juba salvestatud "
-                    "või filtrid on liiga ranged."
+                    "Valitud filtritega "
+                    "tulemusi ei jäänud."
                 )
 
 
@@ -1087,22 +1680,11 @@ else:
             ):
 
 
-                olemas = salvestatud_map.get(
-                    row["Link"]
+                olemas = (
+                    salvestatud_map.get(
+                        row["Link"]
+                    )
                 )
-
-
-                if olemas:
-
-                    status_text = STATUS_LABELS.get(
-                        olemas.get("status", "new"),
-                        olemas.get("status", "")
-                    )
-
-                    st.info(
-                        f"See lugu on juba salvestatud: "
-                        f"**{status_text}**"
-                    )
 
 
                 st.subheader(
@@ -1112,7 +1694,9 @@ else:
                 )
 
 
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3 = (
+                    st.columns(3)
+                )
 
 
                 with col1:
@@ -1138,45 +1722,83 @@ else:
                     )
 
 
-                if pd.notna(row["Kuupäev"]):
+                if pd.notna(
+                    row["Kuupäev"]
+                ):
 
                     st.write(
                         "📅",
-                        row["Kuupäev"].strftime(
+                        row["Kuupäev"]
+                        .strftime(
                             "%d.%m.%Y"
                         )
                     )
 
 
-                if pd.notna(row["Vaatamised"]):
+                if pd.notna(
+                    row["Vaatamised"]
+                ):
 
                     st.write(
                         "👁",
                         vorminda_number(
-                            row["Vaatamised"]
+                            row[
+                                "Vaatamised"
+                            ]
                         ),
                         "vaatamist"
                     )
 
 
-                if pd.notna(row["Jälgijad"]):
+                if pd.notna(
+                    row["Jälgijad"]
+                ):
 
                     st.write(
                         "👥",
                         vorminda_number(
-                            row["Jälgijad"]
+                            row[
+                                "Jälgijad"
+                            ]
                         ),
                         "jälgijat"
                     )
 
 
-                colA, colB = st.columns(2)
+                if (
+                    row["Platvorm"]
+                    ==
+                    "Spotify"
+                ):
+
+                    st.caption(
+                        "Spotify puhul ei ole "
+                        "vaatamiste arvu "
+                        "YouTube'i kujul saadaval."
+                    )
+
+
+                colA, colB = (
+                    st.columns(2)
+                )
 
 
                 with colA:
 
+                    label = (
+                        "🟢 Ava Spotifys"
+                        if row[
+                            "Platvorm"
+                        ]
+                        ==
+                        "Spotify"
+                        else
+                        "▶ Ava lugu"
+                    )
+
+
                     st.link_button(
-                        "▶ Ava lugu",
+                        label,
                         row["Link"],
                         use_container_width=True
                     )
@@ -1199,49 +1821,68 @@ else:
 
 
                     default_status = (
-                        olemas.get("status", "new")
+                        olemas.get(
+                            "status",
+                            "new"
+                        )
                         if olemas
-                        else "new"
+                        else
+                        "new"
                     )
+
 
                     default_note = (
-                        olemas.get("note", "")
+                        olemas.get(
+                            "note",
+                            ""
+                        )
                         if olemas
-                        else ""
+                        else
+                        ""
                     )
 
 
-                    staatus = st.selectbox(
-                        "Staatus",
-                        STATUS_OPTIONS,
-                        index=STATUS_OPTIONS.index(
-                            default_status
-                        ),
-                        format_func=lambda x: STATUS_LABELS[x],
-                        key=f"status_{row['Link']}"
+                    staatus = (
+                        st.selectbox(
+                            "Staatus",
+                            STATUS_OPTIONS,
+                            index=(
+                                STATUS_OPTIONS
+                                .index(
+                                    default_status
+                                )
+                            ),
+                            format_func=lambda x:
+                                STATUS_LABELS[x],
+                            key=(
+                                f"status_"
+                                f"{row['Link']}"
+                            )
+                        )
                     )
 
 
                     markus = st.text_area(
                         "Märkus",
                         value=default_note,
-                        key=f"note_{row['Link']}",
-                        placeholder=(
-                            "Näiteks: hea vokaal, "
-                            "sobib DnB refrääni..."
+                        key=(
+                            f"note_"
+                            f"{row['Link']}"
                         )
                     )
 
 
                     if st.button(
                         "💾 Salvesta",
-                        key=f"save_{row['Link']}",
+                        key=(
+                            f"save_"
+                            f"{row['Link']}"
+                        ),
                         use_container_width=True
                     ):
 
 
                         ok = salvesta_artist(
-
                             row["Artist"],
                             row["Platvorm"],
                             row["Lugu"],
@@ -1250,7 +1891,6 @@ else:
                             staatus,
                             markus,
                             marked_by
-
                         )
 
 
